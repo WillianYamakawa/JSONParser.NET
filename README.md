@@ -4,50 +4,23 @@
 # Parse
 
 ```cs
-JSON.Parse(ref string str);
+JSon.Parse(str);
 ```
 
 #### Returns:
-JSON.Query Object
-
-### TryParse
-
-```cs
-JSON.TryParse(ref string str, out Query query);
-```
-
-#### Returns: 
-bool <has successfuly parsed>
-
-### ParseAsArray
-
-```cs
-JSON.ParseAsArray(ref string str);
-```
-
-#### Returns:
-JSON.Query Object
-
-### TryParseAsArray
-
-```cs
-JSON.TryParseAsArray(ref string str, out Query query);
-```
-
-#### Returns: 
-bool <has successfuly parsed>
+JSon.Query Object
 
 ### Example
 
 ```cs
-    string jsonAsText = "{"Hello": "World!"}"
-    var query = JSON.Parse(ref jsonAsText);
+    string jsonAsText = "{\"Hello\": \"World!\"}"
+    var query = JSon.Parse(jsonAsText);
 ```
 
 ## JSON.Query
 
 ```cs
-public class Query
+public class Query : IEnumerator<Query>, IEnumerable<Query>
 ```
 
 #### Access JSON values
@@ -57,19 +30,35 @@ public class Query
 string str = "{"id": 1, "info": {"name": "Willian", "age": 18} }"
 string name;
 
-JSON.Query query = JSON.Parse(ref str)
-query["info"]["name"].TryParseString(out name);
+JSon.Query query = JSon.Parse(str)
+query.Fetch("info/name").TryGetString(out name);
 ```
 
 #### Parsers
 ```cs
-public bool TryParseString(out string str)
+public bool TryGetString(out string str)
 ```
 ```cs
-public bool TryParseNumber(out float num)
+public bool TryGetNumber(out float num)
 ```
 ```cs
-public bool TryParseList(out List<Query> list)
+public bool TryGetBoolean(out float num)
+```
+```cs
+JSon json = new Json.JSon(File.Open(@"C:\SomeFile", FileMode.Open, FileAccess.Read));
+            
+var parsed = json.Parse();
+            
+var objData = parsed.Fetch("0/objData");
+
+foreach (var data in objData)
+{
+    float x;
+    if (data.Fetch("x").TryGetNumber(out x))
+    {
+        Console.WriteLine(x);
+    }
+} 
 ```
 
 # Object to JSON String

@@ -1,74 +1,115 @@
-public class JSON
-    {
-        public static readonly string TrashChars = " \n\r\t";
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 
-        public static Query Parse(ref string str)
+namespace Json
+{
+    class Query : IEnumerator<Query>, IEnumerable<Query>{
+        private JSon.IValue current;
+        private int enumIndex;
+
+        public Query(JSon.IValue value)
         {
-            string textToParse = SanitizeStringToParse(ref str);
-            List<IndexPair> newQuotesList = GetQuotesPairIndexList(ref textToParse);
-
-            int endIndex = 0;
-            return new Query(DecodeObject(ref textToParse, 0, ref endIndex, newQuotesList));
+            current = value;
         }
 
-        public static bool TryParse(ref string str,out Query query){
-            try{
-                query = Parse(ref str);
+        public Query Fetch(string query){
+                var value = current;
+                try
+                {
+                    if (query == "")
+                    {
+                        return new Query(value);
+                    }
+                    string[] queries = query.Split('/');
+                    foreach (string route in queries)
+                    {
+                        if (value == null)
+                        {
+                            break;
+                        }
+                        int index;
+                        if (int.TryParse(route, out index))
+                        {
+                            value = value[index];
+                        }
+                        else
+                        {
+                            value = value[route];
+                        }
+                    }
+                    return new Query(value);
+                }
+                catch
+                {
+                    return null;
+                }
+                
+            }
+
+        public bool TryGetString(out string result)
+        {
+            try
+            {
+                result = (JSon.StringValue)current;
                 return true;
             }catch{
-                query = null;
+                result = null;
                 return false;
             }
         }
 
-        public static Query ParseAsArray(ref string str)
-        {
-            string textToParse = SanitizeStringToParse(ref str);
-            List<IndexPair> newQuotesList = GetQuotesPairIndexList(ref textToParse);
-
-            int endIndex = 0;
-            return new Query(DecodeArray(ref textToParse, 0, ref endIndex, newQuotesList));
-        }
-
-        public static bool TryParseAsArray(ref string str, out Query query)
+        public bool TryGetNumber(out float result)
         {
             try
             {
-                query = ParseAsArray(ref str);
+                result = (JSon.NumberValue)current;
                 return true;
             }
             catch
             {
-                query = null;
+                result = -1;
                 return false;
             }
         }
 
-        public static string SanitizeStringToParse(ref string str)
+        public bool TryGetBool(out bool result)
         {
-            StringBuilder sb = new StringBuilder(str.Length);
-            List<IndexPair> quotesList = GetQuotesPairIndexList(ref str);
-
-            for (int i = 0; i < str.Length; i++)
+            try
             {
-                if (!IsWithinQuotes(i, quotesList) && TrashChars.IndexOf(str[i]) != -1)
-                {
-                    //NOTHING
-                }
-                else
-                {
-                    sb.Append(str[i]);
-                }
+                result = (JSon.BooleanValue)current;
+                return true;
             }
-
-            return sb.ToString();
+            catch
+            {
+                result = false;
+                return false;
+            }
         }
 
-        public static bool IsWithinQuotes(int index, List<IndexPair> list)
+        public Query Current
         {
-            for (int i = 0; i < list.Count; i++)
-            {
-                if (list[i].isWithin(index))
+            get {return new Query(current[enumIndex++]); }
+        }
+
+        public void Dispose()
+        {
+            enumIndex = 0;
+        }
+
+        object System.Collections.IEnumerator.Current
+        {
+            get { return new Query(current[enumIndex++]); }
+        }
+
+        public bool MoveNext()
+        {
+            if(current != null && current is JSon.ArrayValue){
+                if (enumIndex < ((JSon.ArrayValue)current).Length)
                 {
                     return true;
                 }
@@ -76,817 +117,413 @@ public class JSON
             return false;
         }
 
-        public static string JSONPrepareToString(string str)
+        public void Reset()
         {
-            StringBuilder sb = new StringBuilder(str);
-            sb= sb.Replace(@"\b", "\b");
-            sb.Replace(@"\f", "\f");
-            sb.Replace(@"\n", "\n");
-            sb.Replace(@"\r", "\r");
-            sb.Replace(@"\t", "\t");
-            sb.Replace("\\\"", "\"");
-            sb.Replace(@"\\", "\\");
-            return sb.ToString();
+            enumIndex = 0;
         }
 
-        public static string StringPrepareToJSON(string str)
+        public IEnumerator<Query> GetEnumerator()
         {
-            StringBuilder sb = new StringBuilder(str);
-            sb.Replace("\b", @"\b");
-            sb.Replace("\f", @"\f");
-            sb.Replace("\n", @"\n");
-            sb.Replace("\r", @"\r");
-            sb.Replace("\t", @"\t");
-            sb.Replace("\"", "\\\"");
-            sb.Replace("\\", @"\\");
-            return sb.ToString();
+            return this;
         }
 
-        public static int GetStringEndWithinQuotes(ref string str, int startIndex)
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
         {
-            int endIndex = -1;
-            if (str[startIndex] != '"') throw new Exception("String didnot start with \"");
-            startIndex++;
-            for (int i = startIndex; i < str.Length; i++)
+            return this;
+        }
+    }
+
+    class JSon
+    {
+        private Stream ms;
+        private StreamReader buffer;
+
+        public JSon(string json)
+        {
+            ms = new MemoryStream(Encoding.UTF8.GetBytes(json));
+            buffer = new StreamReader(ms);
+        }
+
+        public JSon(Stream stream)
+        {
+            ms = stream;
+            buffer = new StreamReader(ms);
+        }
+
+        public Query Parse()
+        {
+            if (buffer.Peek() == '{')
             {
-                char ch = str[i];
-                if (ch == '\"')
+                return new Query(ParseObject());
+            }
+            else if (buffer.Peek() == '[')
+            {
+                return new Query(ParseArray());
+            }
+            else
+            {
+                throw new Exception("Unexpected symbol at 1: "+buffer.Peek());
+            }
+        }
+
+        public StringValue ParseString()
+        {
+            StringBuilder sb = new StringBuilder();
+            buffer.Read();
+            bool isLastScape = false;
+            char c;
+            while(buffer.Peek() >= 0){
+                c = (char)buffer.Read();
+                if (isLastScape)
                 {
-                    if (str[i - 1] != '\\')
+                    if (c == 'n')
                     {
-                        endIndex = i;
+                        sb.Append('\n');
+                    }
+                    else if (c == 'r')
+                    {
+                        sb.Append('\r');
+                    }
+                    else if (c == 't')
+                    {
+                        sb.Append('\t');
+                    }
+                    else if (c == '"')
+                    {
+                        sb.Append('\"');
+                    }
+                    else if(c == '\\')
+                    {
+                        sb.Append('\\');
+                    }
+                    isLastScape = false;
+                }
+                else
+                {
+                    if (c == '"')
+                    {
                         break;
+                    }else if(c == '\\'){
+                        isLastScape = true;
+                    }
+                    else
+                    {
+                        sb.Append(c);
                     }
                 }
             }
-            if (endIndex == -1) throw new Exception("String didnot end with \"");
-            return endIndex - 1;
+            return new StringValue(sb.ToString());
         }
 
-        public static bool IsDigit(char n)
+        public NumberValue ParseNumber()
         {
-            byte bc = (byte)n;
-            if (bc >= 0x30 && bc <= 0x39)
+            StringBuilder sb = new StringBuilder();
+            char c;
+            while (buffer.Peek() >= 0)
             {
-                return true;
-            }
-            return false;
-        }
-
-        public static StringValue DecodeString(ref string str, int startIndex, ref int endIndex)
-        {
-            endIndex = GetStringEndWithinQuotes(ref str, startIndex) + 1;
-            return JSONPrepareToString(str.Substring(startIndex + 1, endIndex - 1 - startIndex));
-        }
-
-        public static NumberValue<float> DecodeNumber(ref string str, int startIndex, ref int endIndex)
-        {
-            endIndex = -1;
-            for (int i = startIndex; i < str.Length; i++)
-            {
-                char ch = str[i];
-                if (!IsDigit(ch) && ch != '.')
+                c = (char)buffer.Peek();
+                if (Char.IsDigit(c) || c == '.' || c == '-')
                 {
-                    endIndex = i;
+                    buffer.Read();
+                    sb.Append(c);
+                }
+                else
+                {
                     break;
                 }
             }
-            if (endIndex == -1 || endIndex == startIndex) throw new Exception("Invalid Number");
-            string numberStr = str.Substring(startIndex, endIndex - startIndex);
-            endIndex--;
-            return float.Parse(numberStr, CultureInfo.InvariantCulture);
+            return new NumberValue(float.Parse(sb.ToString(), CultureInfo.InvariantCulture));
         }
 
-        public static BooleanValue DecodeBoolean(ref string str, int startIndex, ref int endIndex)
+        public BooleanValue ParseBoolean()
         {
-            if (str.StartsWith("true"))
+            char first = (char)buffer.Read();
+            if (first == 't' && (char)buffer.Read() == 'r' && (char)buffer.Read() == 'u' && (char)buffer.Read() == 'e')
             {
-                endIndex = startIndex + 3;
-                return true;
+                return new BooleanValue(true);
             }
-            else if(str.StartsWith("false"))
+            else if (first == 'f' && (char)buffer.Read() == 'a' && (char)buffer.Read() == 'l' && (char)buffer.Read() == 's' && (char)buffer.Read() == 'e')
             {
-                endIndex = startIndex + 4;
-                return false;
+                return new BooleanValue(false);
             }
-            throw new Exception("Invalid boolean string");
+            throw new Exception("Coundn't parse bool");
         }
 
-        public static ArrayValue DecodeArray(ref string str, int startIndex, ref int endIndex, List<IndexPair> listOfQuotesPairIndex)
+        public ObjectValue ParseObject()
         {
-            if (str[startIndex] != '[') throw new Exception("Array didnot start with [");
-            ArrayValue ob = new ArrayValue();
-            if (str[startIndex + 1] == ']')
+            ObjectValue values = new ObjectValue();
+            buffer.Read();
+            if ((char)buffer.Peek() == '}')
             {
-                endIndex = startIndex + 1;
-                return ob;
+                buffer.Read();
             }
-            endIndex = GetIndexOfRightCharOfPairOutsideQuotes('[', ']', ref str, startIndex, listOfQuotesPairIndex);
-            if (endIndex == -1) throw new Exception("Missing ]");
-            int lastSeenIndex = startIndex;
-            while (true)
+            else
             {
-                int valueStartIndex = lastSeenIndex + 1;
-                char nextChar = str[valueStartIndex];
-
-                IValue value;
-
-                int valueEndIndex = 0;
-                switch (nextChar)
+                while (buffer.Peek() >= 0)
                 {
-                    case '\"':
-                        value = DecodeString(ref str, valueStartIndex, ref valueEndIndex);
-                        ob.Add(value);
-                        break;
-
-                    case '{':
-                        value = DecodeObject(ref str, valueStartIndex, ref valueEndIndex, listOfQuotesPairIndex);
-                        ob.Add(value);
-                        break;
-
-                    case '[':
-                        value = DecodeArray(ref str, valueStartIndex, ref valueEndIndex, listOfQuotesPairIndex);
-                        ob.Add(value);
-                        break;
-
-                    case 't':
-                        value = DecodeBoolean(ref str, valueStartIndex, ref valueEndIndex);
-                        ob.Add(value);
-                        break;
-
-                    case 'f':
-                        value = DecodeBoolean(ref str, valueStartIndex, ref valueEndIndex);
-                        ob.Add(value);
-                        break;
-
-                    case 'n':
-                        if (str[valueStartIndex + 1] == 'u' && str[valueStartIndex + 2] == 'l' && str[valueStartIndex + 3] == 'l')
-                        {
-                            ob.Add(null);
-                            valueEndIndex = valueStartIndex + 3;
-                        }
-                        else
-                        {
-                            throw new Exception("Invalid value");
-                        }
-                        break;
-
-                    default:
-                        value = new NumberValue<float>(DecodeNumber(ref str, valueStartIndex, ref valueEndIndex));
-                        ob.Add(value);
-                        break;
-                }
-
-                int nextCharIndex = valueEndIndex + 1;
-                char nextCharAfterValue = str[nextCharIndex];
-
-                if (nextCharAfterValue != ',')
-                {
-                    if (nextCharAfterValue == ']')
+                    this.ReadUntilCharIsNotTrash();
+                    string key = this.ParseString();
+                    this.ReadUntilCharIsNotTrash();
+                    if ((char)buffer.Read() != ':') { throw new Exception("Did not found :"); }
+                    this.ReadUntilCharIsNotTrash();
+                    char nextChar = (char)buffer.Peek();
+                    IValue value = null;
+                    switch (nextChar)
                     {
-                        endIndex = nextCharIndex;
-                        return ob;
+                        case '\"':
+                            value = ParseString();
+                            break;
+                        case 'n':
+                            if ((char)buffer.Read() == 'n' && (char)buffer.Read() == 'u' && (char)buffer.Read() == 'l' && (char)buffer.Read() == 'l')
+                            {
+                                value = null;
+                            }
+                            break;
+                        case 't':
+                            value = ParseBoolean();
+                            break;
+                        case 'f':
+                            value = ParseBoolean();
+                            break;
+                        case '{':
+                            value = ParseObject();
+                            break;
+                        case '[':
+                            value = ParseArray();
+                            break;
+                        default:
+                            value = ParseNumber();
+                            break;
+                    }
+                    this.ReadUntilCharIsNotTrash();
+                    values[key] = value;
+                    char end = (char)buffer.Read();
+                    if (end == '}')
+                    {
+                        break;
+                    }
+                    else if (end == ',')
+                    {
+                        continue;
                     }
                     else
                     {
-                        throw new Exception("Invalid end of value");
+                        throw new Exception("Unexpected end: " + end);
                     }
                 }
-                else
-                {
-                    lastSeenIndex = valueEndIndex + 1;
-                }
-
             }
+            return values;
         }
 
-        public static ObjectValue DecodeObject(ref string str, int startIndex, ref int endIndex, List<IndexPair> listOfQuotesPairIndex)
+        public ArrayValue ParseArray()
         {
-            if (str[startIndex] != '{') throw new Exception("Object didnot start with {");
-            ObjectValue ob = new ObjectValue();
-            if (str[startIndex + 1] == '}')
+            ArrayValue values = new ArrayValue();
+            buffer.Read();
+            if ((char)buffer.Peek() == ']')
             {
-                endIndex = startIndex + 1;
-                return ob;
+                buffer.Read();
             }
-            if (endIndex == -1) throw new Exception("Missing }");
-            int lastSeenIndex = startIndex;
-            while (true)
+            else
             {
-                int delimiterIndex = GetIndexOfCharOutsideQuotes(':', ref str, lastSeenIndex + 1, listOfQuotesPairIndex);
-                int lastKeyIndex = 0;
-                string key = DecodeString(ref str, lastSeenIndex + 1, ref lastKeyIndex);
-
-                int valueStartIndex = delimiterIndex + 1;
-                char nextChar = str[valueStartIndex];
-
-                IValue value;
-
-                int valueEndIndex = 0;
-                switch (nextChar)
+                while (buffer.Peek() >= 0)
                 {
-                    case '\"':
-                        value = DecodeString(ref str, valueStartIndex, ref valueEndIndex);
-                        ob.Add(key, value);
-                        break;
-
-                    case '{':
-                        value = DecodeObject(ref str, valueStartIndex, ref valueEndIndex, listOfQuotesPairIndex);
-                        ob.Add(key, value);
-                        break;
-
-                    case '[':
-                        value = DecodeArray(ref str, valueStartIndex, ref valueEndIndex, listOfQuotesPairIndex);
-                        ob.Add(key, value);
-                        break;
-
-                    case 't':
-                        value = DecodeBoolean(ref str, valueStartIndex, ref valueEndIndex);
-                        ob.Add(key, value);
-                        break;
-
-                    case 'f':
-                        value = DecodeBoolean(ref str, valueStartIndex, ref valueEndIndex);
-                        ob.Add(key, value);
-                        break;
-
-                    case 'n':
-                        if (str[valueStartIndex + 1] == 'u' && str[valueStartIndex + 2] == 'l' && str[valueStartIndex + 3] == 'l')
-                        {
-                            ob.Add(key, null);
-                            valueEndIndex = valueStartIndex + 3;
-                        }
-                        else
-                        {
-                            throw new Exception("Invalid value");
-                        }
-                        break;
-
-                    default:
-                        value = new NumberValue<float>(DecodeNumber(ref str, valueStartIndex, ref valueEndIndex));
-                        ob.Add(key, value);
-                        break;
-                }
-
-                int nextCharIndex = valueEndIndex + 1;
-                char nextCharAfterValue = str[nextCharIndex];
-
-                if (nextCharAfterValue != ',')
-                {
-                    if (nextCharAfterValue == '}')
+                    this.ReadUntilCharIsNotTrash();
+                    char nextChar = (char)buffer.Peek();
+                    IValue value = null;
+                    switch (nextChar)
                     {
-                        endIndex = nextCharIndex;
-                        return ob;
+                        case '\"':
+                            value = ParseString();
+                            break;
+                        case 'n':
+                            if ((char)buffer.Read() == 'n' && (char)buffer.Read() == 'u' && (char)buffer.Read() == 'l' && (char)buffer.Read() == 'l')
+                            {
+                                value = null;
+                            }
+                            break;
+                        case 't':
+                            value = ParseBoolean();
+                            break;
+                        case 'f':
+                            value = ParseBoolean();
+                            break;
+                        case '{':
+                            value = ParseObject();
+                            break;
+                        case '[':
+                            value = ParseArray();
+                            break;
+                        default:
+                            value = ParseNumber();
+                            break;
+                    }
+                    this.ReadUntilCharIsNotTrash();
+                    values.Add(value);
+                    char end = (char)buffer.Read();
+                    if (end == ']')
+                    {
+                        break;
+                    }
+                    else if (end == ',')
+                    {
+                        continue;
                     }
                     else
                     {
-                        throw new Exception("Invalid end of value");
+                        throw new Exception("Unexpected end: " + end);
                     }
                 }
-                else
-                {
-                    lastSeenIndex = valueEndIndex + 1;
-                }
-
             }
+            return values;
         }
 
-        public static int GetIndexOfCharOutsideQuotes(char ch, ref string str, int startIndex, List<IndexPair> list)
-        {
-            int lastSeenIndex = startIndex;
-            if (str[startIndex] == ch) return startIndex;
-            while (true)
-            {
-                int index = str.IndexOf(ch, lastSeenIndex + 1);
-                if (index == -1) break;
-                bool hasFoundInsideQuotes = IsWithinQuotes(index, list);
-                
-                if (!hasFoundInsideQuotes)
-                {
-                    return index;
-                }
-                else
-                {
-                    lastSeenIndex = index;
-                }
-            }
-            return -1;
-        }
-
-        public static int GetIndexOfRightCharOfPairOutsideQuotes(char charLeft, char charRight, ref string str, int startIndex, List<IndexPair> list)
-        {
-            int scopeLevel = 0;
-            int lastSeenIndex = startIndex;
-            while(true)
-            {
-                int charLeftIndex = GetIndexOfCharOutsideQuotes(charLeft, ref str, lastSeenIndex + 1, list);
-                int charRightIndex = GetIndexOfCharOutsideQuotes(charRight, ref str, lastSeenIndex + 1, list);
-                if (charRightIndex == -1) return -1;
-                if (charRightIndex < charLeftIndex || charLeftIndex == -1)
-                {
-                    if (scopeLevel == 0)
-                    {
-                        return charRightIndex;
-                    }
-                    else
-                    {
-                        scopeLevel--;
-                        lastSeenIndex = charRightIndex;
-                    }
-
-                }
-                else
-                {
-                    scopeLevel++;
-                    lastSeenIndex = charLeftIndex;
-                }
-            }
-        }
-
-        public static List<IndexPair> GetQuotesPairIndexList(ref string str)
-        {
-            List<IndexPair> listOfQuotes = new List<IndexPair>();
-            int lastSeenIndex = -1;
-            while (true)
-            {
-                int leftQuoteIndex = str.IndexOf("\"", lastSeenIndex + 1);
-                if (leftQuoteIndex == -1) break;
-                int rightQuoteIndex = GetStringEndWithinQuotes(ref str, leftQuoteIndex) + 1;
-                listOfQuotes.Add(new IndexPair(leftQuoteIndex, rightQuoteIndex));
-                lastSeenIndex = rightQuoteIndex;
-            }
-            return listOfQuotes;
-        }
-
-        public static ArrayValue DecodeArray(string str)
-        {
-            return null;
-        }
-
-        public struct IndexPair
-        {
-            public int start;
-            public int end;
-
-            public IndexPair(int start, int end){
-                this.start = start;
-                this.end = end;
-            }
-
-            public bool isWithin(int n)
-            {
-                return n >= this.start && n <= this.end;
-            }
-
-            public override string ToString()
-            {
-                return start.ToString() + " " + end.ToString();
+        public void ReadUntilCharIsNotTrash(){
+            while ((char)buffer.Peek() == ' ' || (char)buffer.Peek() == '\n' || (char)buffer.Peek() == '\r' || (char)buffer.Peek() == '\t'){
+                buffer.Read();
             }
         }
 
         public interface IValue
         {
             string ToJSON();
-            IValue this[string str] { get; }
-            IValue this[int idx] { get; }
+            JSon.IValue this[string str] { get; }
+            JSon.IValue this[int idx] { get; }
         }
 
-        public class StringValue : IValue
+        public class StringValue : JSon.IValue
         {
-            private string _innerString { get; set; }
-
-            public StringValue(string str)
+            private string _innerString;
+            public string Data { get { return this._innerString; } set { this._innerString = value; } }
+            public string ToJSON() 
             {
-                _innerString = str;
+                if (this._innerString == null) return "null"; 
+                else{
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < this._innerString.Length; i++)
+                    {
+                        if (this._innerString[i] == '\n')
+                        {
+                            sb.Append("\\n");
+                        }
+                        else if (this._innerString[i] == '\r')
+                        {
+                            sb.Append("\\r");
+                        }
+                        else if (this._innerString[i] == '\t')
+                        {
+                            sb.Append("\\t");
+                        }
+                        else if (this._innerString[i] == '"')
+                        {
+                            sb.Append("\\\"");
+                        }
+                        else if (this._innerString[i] == '\\')
+                        {
+                            sb.Append("\\\\");
+                        }
+                        else
+                        {
+                            sb.Append(this._innerString[i]);
+                        }
+                    }
+                    return "\"" + sb.ToString() +"\"";
+                }; 
             }
+            public static implicit operator string(JSon.StringValue sv) { return sv._innerString ?? string.Empty; }
+            public static implicit operator JSon.StringValue(string str) { return new JSon.StringValue(str); }
+            public override string ToString() { return this._innerString; }
+            public JSon.IValue this[string str] { get { return null; } }
+            public JSon.IValue this[int idx] { get { return null; } }
+            public StringValue(string str) { this._innerString = str; }
+        }
+
+        public class NumberValue : JSon.IValue
+        {
+            private float _innerNumber;
+            public float Data { get { return this._innerNumber; } set { this._innerNumber = value; } }
+            public string ToJSON() { return _innerNumber.ToString().Replace(",", "."); }
+            public static implicit operator float(JSon.NumberValue nv) { return nv._innerNumber; }
+            public static implicit operator JSon.NumberValue(float val) { return new JSon.NumberValue(val); }
+            public override string ToString() { return this._innerNumber.ToString().Replace(",", "."); }
+            public JSon.IValue this[string str] { get { return null; } }
+            public JSon.IValue this[int idx] { get { return null; } }
+            public NumberValue(float number) { this._innerNumber = number; }
+        }
+
+        public class ObjectValue : Dictionary<string, JSon.IValue>, JSon.IValue
+        {
+            public new void Add(string key, JSon.IValue value) { this[key] = value; }
+            public JSon.IValue this[int idx] { get { return null; } }
 
             public string ToJSON()
             {
-                if (this._innerString == null) return "null";
-                return "\"" + StringPrepareToJSON(_innerString) + "\"";
-            }
-
-            public static implicit operator string(StringValue sv)
-            {
-                return sv._innerString ?? "";
-            }
-
-            public static implicit operator StringValue(string str)
-            {
-                return new StringValue(str);
-            }
-
-            public override string ToString()
-            {
-                return this._innerString;
-            }
-
-            public IValue this[string str]
-            {
-                get
-                {
-                    return null;
-                }
-
-            }
-
-            public IValue this[int idx]
-            {
-                get
-                {
-                    return null;
-                }
-            }
-        }
-
-        public class NumberValue<T> : IValue
-        {
-            private T _innerNumber { get; set; }
-
-            public NumberValue(T number)
-            {
-                _innerNumber = number;
-            }
-
-            public string ToJSON()
-            {
-                return _innerNumber.ToString().Replace(",", ".");
-            }
-
-            public static implicit operator T(NumberValue<T> nv)
-            {
-                return nv._innerNumber;
-            }
-
-            public static implicit operator NumberValue<T>(T val)
-            {
-                return new NumberValue<T>(val);
-            }
-
-            public override string ToString()
-            {
-                return this._innerNumber.ToString().Replace(",", ".");
-            }
-
-            public IValue this[string str]
-            {
-                get
-                {
-                    return null;
-                }
-            }
-
-            public IValue this[int idx]
-            {
-                get
-                {
-                    return null;
-                }
-            }
-
-        }
-
-        public class ObjectValue : IValue
-        {
-            private Dictionary<string, IValue> _innerItems { get; set; }
-            public List<string> Keys { get { 
-                List<string> list = new List<string>();
-
-                foreach (var key in this._innerItems.Keys)
-                {
-                    list.Add(key);
-                }
-                return list;
-            } }
-
-            public ObjectValue()
-            {
-                this._innerItems = new Dictionary<string, IValue>();
-            }
-
-            public ObjectValue(Dictionary<string, IValue> items)
-            {
-                this._innerItems = items;
-            }
-
-            public void Add(string key, IValue value)
-            {
-                this._innerItems[key] = value;
-            }
-
-            public string ToJSON()
-            {
-                StringBuilder builder = new StringBuilder();
-                builder.Append("{");
-
-                List<string> keys = new List<string>();
-
-                foreach(var key in this._innerItems.Keys){
-                    keys.Add(key);
-                }
-
+                StringBuilder builder = new StringBuilder().Append("{");
+                List<string> keys = new List<string>(this.Keys);
                 for (int i = 0; i < keys.Count; i++)
                 {
-                    IValue value = this._innerItems[keys[i]];
-                    builder.Append("\"");
-                    builder.Append(keys[i]);
-                    builder.Append("\":");
-                    if (value == null)
-                    {
-                        builder.Append("null");
-                    }
-                    else
-                    {
-                        builder.Append(value.ToJSON());
-                    }
+                    JSon.IValue value = this[keys[i]];
+                    builder.Append("\"").Append(keys[i]).Append("\":");
+                    if (value == null) { builder.Append("null"); } else { builder.Append(value.ToJSON()); }
                     if (i < keys.Count - 1) { builder.Append(","); }
                 }
                 builder.Append("}");
                 return builder.ToString();
             }
 
-            public IValue this[string str]{
-                get
-                {
-                    return this._innerItems[str];
-                }
-
-                set
-                {
-                    this._innerItems[str] = value;
-                }
-            }
-
-            public IValue this[int idx]
-            {
-                get
-                {
-                    return null;
-                }
-            }
-
-            public static implicit operator Dictionary<string, IValue>(ObjectValue ov)
-            {
-                return ov._innerItems;
-            }
-
-            public static implicit operator ObjectValue(Dictionary<string, IValue> dict)
-            {
-                return new ObjectValue(dict);
-            }
-
             public override string ToString()
             {
                 StringBuilder sb = new StringBuilder();
-                foreach (var key in this._innerItems.Keys)
-                {
-                    sb.Append(key);
-                    sb.Append('\n');
-                }
+                foreach (var key in this.Keys) { sb.Append(key).Append('\n'); }
                 return sb.ToString();
             }
         }
 
-        public class ArrayValue : IValue
+        public class ArrayValue : JSon.IValue
         {
-             private List<IValue> _innerItems { get; set; }
-
-             public int Length { get { return this._innerItems.Count; } }
-
-            public ArrayValue()
-            {
-                this._innerItems = new List<IValue>();
-            }
-
-            public ArrayValue(List<IValue> items)
-            {
-                this._innerItems = items;
-            }
-
-            public void Add(IValue value)
-            {
-                this._innerItems.Add(value);
-            }
+            private List<JSon.IValue> _innerItems;
+            public int Length { get { return this._innerItems.Count; } }
+            public void Add(JSon.IValue value) { this._innerItems.Add(value); }
+            public JSon.IValue this[int idx] { get { return this._innerItems[idx]; } set { this._innerItems[idx] = value; } }
+            public JSon.IValue this[string str] { get { return null; } }
+            public static implicit operator List<JSon.IValue>(JSon.ArrayValue av) { return av._innerItems; }
+            public static implicit operator JSon.ArrayValue(List<JSon.IValue> list) { return new JSon.ArrayValue(list); }
 
             public string ToJSON()
             {
-                StringBuilder builder = new StringBuilder();
-                builder.Append("[");
+                StringBuilder builder = new StringBuilder().Append("[");
                 for (int i = 0; i < this._innerItems.Count; i++)
                 {
-                    IValue value = this._innerItems[i];
-                    if (value == null)
-                    {
-                        builder.Append("null");
-                    }
-                    else
-                    {
-                        builder.Append(value.ToJSON());
-                    }
+                    JSon.IValue value = this._innerItems[i];
+                    if (value == null) { builder.Append("null"); } else { builder.Append(value.ToJSON()); }
                     if (i < this._innerItems.Count - 1) { builder.Append(","); }
                 }
                 builder.Append("]");
                 return builder.ToString();
-                 
-            }
 
-            public IValue this[int idx]
-            {
-                get
-                {
-                    return this._innerItems[idx];
-                }
-
-                set
-                {
-                    this._innerItems[idx] = value;
-                }
-            }
-
-            public IValue this[string str]
-            {
-                get
-                {
-                    return null;
-                }
-            }
-
-            public static implicit operator List<IValue>(ArrayValue av)
-            {
-                return av._innerItems;
-            }
-
-            public static implicit operator ArrayValue(List<IValue> list)
-            {
-                return new ArrayValue(list);
             }
 
             public override string ToString()
             {
                 StringBuilder sb = new StringBuilder();
-                foreach (var item in this._innerItems)
-                {
-                    sb.Append(item.ToString());
-                    sb.Append('\n');
-                }
+                foreach (var item in this._innerItems) { sb.Append(item.ToString()).Append('\n'); }
                 return sb.ToString();
             }
+
+            public ArrayValue() { this._innerItems = new List<JSon.IValue>(); }
+            public ArrayValue(List<JSon.IValue> items) { this._innerItems = items; }
         }
 
-        public class BooleanValue : IValue
+        public class BooleanValue : JSon.IValue
         {
-            private bool _innerBool { get; set; }
-
-            public BooleanValue(bool bl)
-            {
-                _innerBool = bl;
-            }
-
-            public string ToJSON()
-            {
-                return _innerBool ? "true" : "false";
-            }
-
-            public static implicit operator bool(BooleanValue bv)
-            {
-                return bv._innerBool;
-            }
-
-            public static implicit operator BooleanValue(bool bl)
-            {
-                return new BooleanValue(bl);
-            }
-
-            public override string ToString()
-            {
-                return this._innerBool.ToString();
-            }
-
-            public IValue this[string str]
-            {
-                get
-                {
-                    return null;
-                }
-            }
-
-            public IValue this[int idx]
-            {
-                get
-                {
-                    return null;
-                }
-            }
-        }
-
-        public class Query
-        {
-            IValue _selected;
-
-            public bool TryParseString(out string str)
-            {
-                try
-                {
-                    str = (StringValue)this._selected;
-                    return true;
-                }catch{
-                    str = null;
-                    return false;
-                }
-            }
-
-            public bool TryParseNumber(out float num)
-            {
-                try
-                {
-                    num = (NumberValue<float>)this._selected;
-                    return true;
-                }
-                catch
-                {
-                    num = 0;
-                    return false;
-                }
-            }
-
-            public bool TryParseList(out List<Query> list)
-            {
-                try
-                {
-                    ArrayValue av = (ArrayValue)this._selected;
-                    list = new List<Query>();
-
-                    for (int i = 0; i < av.Length; i++)
-                    {
-                        list.Add(new Query(av[i]));
-                    }
-                    
-                    return true;
-                }
-                catch
-                {
-                    list = null;
-                    return false;
-                }
-            }
-
-            public bool TryParseDictionary(out Dictionary<string, Query> dict)
-            {
-                try
-                {
-                    ObjectValue ov = (ObjectValue)this._selected;
-                    dict = new Dictionary<string, Query>();
-                    List<string> keys = ov.Keys;
-
-                    for (int i = 0; i < keys.Count; i++)
-                    {
-                        dict[keys[i]] = new Query(ov[keys[i]]);
-                    }
-
-                    return true;
-                }
-                catch
-                {
-                    dict = null;
-                    return false;
-                }
-            }
-
-            public Query(IValue value)
-            {
-                this._selected = value;
-            }
-
-            public Query this[string str]
-            {
-                get
-                {
-                    try
-                    {
-                        this._selected = this._selected[str];
-                    }
-                    catch
-                    {
-                        this._selected = null;
-                    }
-                    return this;
-                }
-            }
-
-            public Query this[int idx]
-            {
-                get
-                {
-                    try
-                    {
-                        this._selected = this._selected[idx];
-                    }
-                    catch
-                    {
-                        this._selected = null;
-                    }
-                    return this;
-                }
-            }
+            private bool _innerBool;
+            public bool Data { get { return this._innerBool; } set { this._innerBool = value; } }
+            public string ToJSON() { return this._innerBool ? "true" : "false"; }
+            public static implicit operator bool(JSon.BooleanValue bv) { return bv._innerBool; }
+            public static implicit operator JSon.BooleanValue(bool bl) { return new JSon.BooleanValue(bl); }
+            public override string ToString() { return this._innerBool.ToString(); }
+            public JSon.IValue this[string str] { get { return null; } }
+            public JSon.IValue this[int idx] { get { return null; } }
+            public BooleanValue(bool bl) { this._innerBool = bl; }
         }
     }
+}

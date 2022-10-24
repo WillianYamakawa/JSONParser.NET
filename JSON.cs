@@ -46,7 +46,7 @@ namespace Json
                 }
                 catch
                 {
-                    return null;
+                    return new Query(null);
                 }
                 
             }

@@ -27,7 +27,7 @@ public class Query : IEnumerator<Query>, IEnumerable<Query>
 
 ```cs
 //...
-string str = "{"id": 1, "info": {"name": "Willian", "age": 18} }"
+string str = "{"id": 1, "info": {"name": "Willian", "age": 18} }";
 string name;
 
 JSon.Query query = JSon.Parse(str)
@@ -44,6 +44,8 @@ public bool TryGetNumber(out float num)
 ```cs
 public bool TryGetBoolean(out float num)
 ```
+
+#### Foreach
 ```cs
 JSon json = new Json.JSon(File.Open(@"C:\SomeFile", FileMode.Open, FileAccess.Read));
             
